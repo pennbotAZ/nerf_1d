@@ -5,6 +5,23 @@ def linear_sample(near, far, num_samples):
     t_vals = torch.linspace(0, 1, steps=num_samples)
     return near * (1 - t_vals) + far * t_vals
 
+def stratified_sample(sample):
+    """In each interval sample[i-1], sample[i] of sample, randomly select a number within the interval as the new sample
+
+    Args:
+        sample (..., N): original sample
+
+    Returns:
+        new_sample (..., N): new sample after perturbing
+    """
+    left_bin_edge = sample[..., :-1]   
+    right_bin_edge = sample[..., 1:]
+    mids = 0.5 * (left_bin_edge + right_bin_edge)
+    lower = torch.cat((left_bin_edge[..., :1], mids), -1)
+    upper = torch.cat((mids, right_bin_edge[-1:]), -1)
+    t_rand = torch.rand_like(sample)
+    return lower + (upper - lower) * t_rand
+
 def sigma2alpha(sigma, dist):
     return 1. - torch.exp(-F.relu(sigma) * dist)
 
@@ -30,15 +47,21 @@ def raw2outputs(raw, z_vals):
 def render_rays(rays_o, rays_d, view_dirs, network_fn):
     near = 0
     far = 4
-    n_samples = 64
+    n_samples = 128
     if cuda:
         z_vals = linear_sample(near, far, n_samples).cuda()
     else:
         z_vals = linear_sample(near, far, n_samples)
+    
     # import pdb; pdb.set_trace()
-
-    pts = rays_o[...,None,:] + torch.stack([torch.cos(rays_d)[...,None] * z_vals[None, ...], torch.sin(rays_d)[...,None] * z_vals[None, ...]], -1)
-    raw = network_fn(torch.cat([pts, view_dirs[...,None, None].expand((-1, n_samples, 1))],-1))
+    z_vals = stratified_sample(z_vals)
+    # pts = rays_o[...,None,:] + torch.stack([torch.cos(rays_d)[...,None] * z_vals[None, ...], torch.sin(rays_d)[...,None] * z_vals[None, ...]], -1)
+    # raw = network_fn(torch.cat([pts, view_dirs[...,None, None].expand((-1, n_samples, 1))],-1))
+    
+    # import pdb; pdb.set_trace()
+    pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[None, ..., None]#torch.stack([torch.cos(rays_d)[...,None] * z_vals[None, ...], torch.sin(rays_d)[...,None] * z_vals[None, ...]], -1)
+    raw = network_fn(torch.cat([pts, view_dirs[...,None, :].expand((-1, n_samples, 2))],-1))
+    
     return raw2outputs(raw, z_vals)
 
 def raw2outputs_step(raw, z_vals):
